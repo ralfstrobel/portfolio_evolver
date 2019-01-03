@@ -1,0 +1,14 @@
+[package]
+name = "portfolio_evolver"
+version = "0.1.0"
+authors = ["Ralf Strobel <4642988+ralfstrobel@users.noreply.github.com>"]
+
+[dependencies]
+rand = "0.6"
+rand_xorshift = "0.1"
+serde = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+chrono = "0.4"
+rayon = "1.0"
+indicatif = "0.11"
+#simd = "0.1"
