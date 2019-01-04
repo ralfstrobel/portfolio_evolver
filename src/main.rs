@@ -54,6 +54,27 @@ const TRAIT_MAX_DEFAULT : &str = "0.15";
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+use std::alloc::{GlobalAlloc, System, Layout};
+
+struct SimdAwareAllocator;
+unsafe impl GlobalAlloc for SimdAwareAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8
+    {
+        let layout = Layout::from_size_align_unchecked(layout.size(), 32);
+        System.alloc(layout)
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout)
+    {
+        let layout = Layout::from_size_align_unchecked(layout.size(), 32);
+        System.dealloc(ptr, layout)
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR : SimdAwareAllocator = SimdAwareAllocator;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 fn main() {
     
     //Initialize environment variables ...

@@ -36,6 +36,11 @@ use self::serde_json::{
     ser::PrettyFormatter as JsonPrettyFormatter
 };
 
+#[cfg(target_arch = "x86")]
+use std::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 const PORTFOLIO_DIRECTORY : &str = "../portfolios/";
@@ -319,6 +324,33 @@ impl ChartData
     }
     
     ///
+    /// Returns the SIMD iterable length (divisible by 8).
+    ///
+    fn simd_len(&self) -> usize
+    {
+        let mut len = self.values.len();
+        let simd_offset = len % 8;
+        if simd_offset != 0 {
+            len += 8 - simd_offset;
+        }
+        return len;
+    }
+    
+    ///
+    /// Ensures that the number of allocated elemtents can be devided by 8.
+    /// Space behind the last element is padded with 0.0 if necessary.
+    ///
+    fn ensure_simd_padding(&mut self)
+    {
+        let true_len = self.values.len();
+        let simd_len = self.simd_len();
+        for _ in 0..(simd_len - true_len) {
+            self.values.push(0.0);            
+        }
+        self.values.truncate(true_len);
+    }
+    
+    ///
     /// Will panic if the given other chart data does not contain data points
     /// which exactly align with ours (values of same index correspond to same time).
     ///
@@ -363,6 +395,7 @@ impl AlignedChartDataSet
         
         for chart in charts.iter_mut() {
             chart.truncate(max_start_time, min_end_time);
+            chart.ensure_simd_padding();
         }
         for chart in charts.iter() {
             chart.assert_aligned_with(&charts[0]);
@@ -383,15 +416,27 @@ impl AlignedChartDataSet
             .filter(|x| x.1 != 0.0)
             .collect();
         
-        //TODO: use SIMD (AVX2 f32x8)
-        let mut combined = Vec::with_capacity(self.chart_len());
-        for i in 0..self.chart_len() {
-            let mut value : f32 = 0.0;
-            for (j, coeff) in coeff_map.iter() {
-                value += self.charts[*j].values[i] * (*coeff);
+        let simd_len = self.charts[0].simd_len();
+        let mut combined = Vec::new();
+        combined.reserve_exact(simd_len);
+        
+        unsafe {
+            combined.set_len(self.chart_len());
+            for i in (0..self.chart_len()).step_by(8) {
+                let mut combined_values = _mm256_setzero_ps();
+                for (j, coeff) in coeff_map.iter() {
+                    let mut values = _mm256_loadu_ps(&self.charts[*j].values[i]);
+                    let coeffs = _mm256_broadcast_ss(&coeff);
+                    values = _mm256_mul_ps(values, coeffs);
+                    combined_values = _mm256_add_ps(combined_values, values);
+                }
+                //Note: We are using the unaligned load/store instructions, since they are not
+                //slower if the memory turns out to be aligned, but this is more compatible.
+                //To ensure aligend memory, replace the global memory allocator.
+                _mm256_storeu_ps(&mut combined[i], combined_values);
             }
-            combined.push(value);
         }
+        
         return combined;
     }
     
