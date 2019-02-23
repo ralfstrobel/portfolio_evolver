@@ -138,7 +138,7 @@ fn main() {
     let num_traits = charts.len();
     let num_individuals = trait_population_factor * num_traits;
     let num_generations = 2 * num_individuals;
-    let num_species = 30;
+    let num_species = 35;
     let num_results_averaged = 15;
     
     println!(
@@ -205,7 +205,8 @@ fn main() {
     portfolio.save();
     
     let cur_date_string = Local::today().format(DATE_FORMAT).to_string();
-    let portfolio_copy_name = format!("{}_{}", portfolio_name, cur_date_string);
+    let cur_year_string = Local::today().format("%Y").to_string();
+    let portfolio_copy_name = format!("{}/{}_{}", cur_year_string, portfolio_name, cur_date_string);
     portfolio.set_name(&portfolio_copy_name);
     portfolio.save();
     result_text.push_str("\n\n");
