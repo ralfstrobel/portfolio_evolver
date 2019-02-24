@@ -133,18 +133,29 @@ impl Portfolio
     ///
     pub fn get_keys(&self) -> Vec<String>
     {
-        return self.json.keys().map(|x| x.clone()).collect();
+        let mut keys = Vec::new();
+        for key in self.json.keys() {
+            let item = self.json.get(key).unwrap().as_object().unwrap();
+            if !item.contains_key("percent") {
+                continue;
+            }
+            keys.push(key.clone());
+        }
+        return keys;
     }
     
     ///
     /// Collects the "title" property across all assets within the portfolio.
-    /// The returned vector aligns with the keys returned by the keys() function.
+    /// The returned vector aligns with the keys returned by the get_keys() function.
     ///
     pub fn get_titles(&self) -> Vec<String>
     {
         let mut titles = Vec::new();
         for item in self.json.values() {
             let item = item.as_object().unwrap();
+            if !item.contains_key("percent") {
+                continue;
+            }
             let title = match item.get("title") {
                 Option::None => "[unnamed]",
                 Option::Some(val) => val.as_str().unwrap()
@@ -163,6 +174,9 @@ impl Portfolio
         let mut values = Vec::new();
         for item in self.json.values() {
             let item = item.as_object().unwrap();
+            if !item.contains_key("percent") {
+                continue;
+            }
             let value = match item.get(property_name) {
                 Option::None => 0.0,
                 Option::Some(val) => val.as_f64().unwrap() as f32
@@ -174,13 +188,16 @@ impl Portfolio
     
     ///
     /// Sets a (floating point) property across all assets within the portfolio.
-    /// The given values must be aligned with the keys returned by the keys() function.
+    /// The given values must be aligned with the keys returned by the get_keys() function.
     ///
     pub fn set_mapped_property(&mut self, property_name : &str, values : &Vec<f32>)
     {
         let mut idx = 0;
         for item in self.json.values_mut() {
             let mut item = item.as_object_mut().unwrap();
+            if !item.contains_key("percent") {
+                continue;
+            }
             let new_value = JsonValue::from(((values[idx] as f64) * 10.0).round() / 10.0);
             if item.contains_key(property_name) {
                 let mut property = item.get_mut(property_name).unwrap();
