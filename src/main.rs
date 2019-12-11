@@ -47,10 +47,10 @@ const OBJECTIVE_NAME_MAX_UNI : &str = "max_uni";
 const OBJECTIVE_SUFFIX_ENV : &str = "OPTIMIZATION_NAME_SUFFIX";
 const SAVE_RESULTS_ENV : &str = "SAVE_RESULTS";
 
-const TRAIT_POPULATION_ENV : &str = "TRAIT_POPULATION";
-const TRAIT_POPULATION_DEFAULT : &str = "16";
-const TRAIT_MAX_ENV : &str = "TRAIT_MAX";
-const TRAIT_MAX_DEFAULT : &str = "0.15";
+const GENE_POPULATION_ENV: &str = "GENE_POPULATION";
+const GENE_POPULATION_DEFAULT: &str = "16";
+const GENE_MAX_ENV: &str = "GENE_MAX";
+const GENE_MAX_DEFAULT: &str = "0.15";
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -107,13 +107,13 @@ fn main() {
         Err(_) => true
     };
     
-    let trait_population_factor = env::var(TRAIT_POPULATION_ENV)
-        .unwrap_or(String::from(TRAIT_POPULATION_DEFAULT))
+    let gene_population_factor = env::var(GENE_POPULATION_ENV)
+        .unwrap_or(String::from(GENE_POPULATION_DEFAULT))
         .parse::<usize>().unwrap();
     
     unsafe {
-        evolution::TRAIT_MAX = env::var(TRAIT_MAX_ENV)
-            .unwrap_or(String::from(TRAIT_MAX_DEFAULT))
+        evolution::GENE_MAX = env::var(GENE_MAX_ENV)
+            .unwrap_or(String::from(GENE_MAX_DEFAULT))
             .parse::<f32>().unwrap();
     }
     
@@ -135,22 +135,22 @@ fn main() {
     
     //Run Simulation...
     
-    let num_traits = charts.len();
-    let num_individuals = trait_population_factor * num_traits;
+    let num_genes = charts.len();
+    let num_individuals = gene_population_factor * num_genes;
     let num_generations = 2 * num_individuals;
     let num_species = 35;
     let num_results_averaged = 15;
     
     println!(
-        "\nEvolving {} species of {} individuals with {} traits for {} generations, selecting for '{}'...",
+        "\nEvolving {} species of {} individuals with {} genes for {} generations, selecting for '{}'...",
         num_species,
         num_individuals,
-        num_traits,
+        num_genes,
         num_generations,
         objective_name
     );
     
-    let mut ecosystem = Ecosystem::new(num_species, num_individuals, num_traits);
+    let mut ecosystem = Ecosystem::new(num_species, num_individuals, num_genes);
     match objective_name.as_str() {
         OBJECTIVE_NAME_MAX_PERF => {
             let objective = MaxPerformanceObjective { charts };
@@ -188,7 +188,7 @@ fn main() {
         objective_name_suffix,
         result.get_fitness()
     );
-    for (i, value) in result.enumerate_traits_sorted() {
+    for (i, value) in result.enumerate_genes_sorted() {
         result_text += &format!("  {:.1}% {}\n", value * 100.0, asset_titles[i]);
     }
     result_text += &format!("}}");
@@ -200,7 +200,7 @@ fn main() {
     }
     
     let result_property_name = format!("percent_{}{}", objective_name, objective_name_suffix);
-    let result_property = result.get_traits().iter().map(|x| x * 100.0).collect();
+    let result_property = result.get_genome().iter().map(|x| x * 100.0).collect();
     portfolio.set_mapped_property(&result_property_name, &result_property);
     portfolio.save();
     
@@ -216,9 +216,9 @@ fn main() {
 struct MaxPerformanceObjective { charts: AlignedChartDataSet }
 impl Objective for MaxPerformanceObjective
 {
-    fn assess(&self, traits: &[f32]) -> f32
+    fn assess(&self, genome: &[f32]) -> f32
     {
-        let combined = self.charts.combine(&traits);
+        let combined = self.charts.combine(&genome);
         let mut max = f32::NEG_INFINITY;
         for value in combined.iter() {
             max = value.max(max);
@@ -230,9 +230,9 @@ impl Objective for MaxPerformanceObjective
 struct MinLossObjective { charts: AlignedChartDataSet }
 impl Objective for MinLossObjective
 {
-    fn assess(&self, traits: &[f32]) -> f32
+    fn assess(&self, genome: &[f32]) -> f32
     {
-        let combined = self.charts.combine(&traits);
+        let combined = self.charts.combine(&genome);
         
         let mut current_max = combined[0];
         let mut current_dd : f32 = 0.0;
@@ -260,9 +260,9 @@ impl Objective for MinLossObjective
 struct MinDayLossObjective { charts: AlignedChartDataSet }
 impl Objective for MinDayLossObjective
 {
-    fn assess(&self, traits: &[f32]) -> f32
+    fn assess(&self, genome: &[f32]) -> f32
     {
-        let combined = self.charts.combine(&traits);
+        let combined = self.charts.combine(&genome);
         
         let mut max_loss : f32 = 0.0;
         
@@ -281,9 +281,9 @@ impl Objective for MinDayLossObjective
 struct MinLossSumObjective { charts: AlignedChartDataSet }
 impl Objective for MinLossSumObjective
 {
-    fn assess(&self, traits: &[f32]) -> f32
+    fn assess(&self, genome: &[f32]) -> f32
     {
-        let combined = self.charts.combine(&traits);
+        let combined = self.charts.combine(&genome);
         
         let mut loss_sum : f64 = 0.0;
         
@@ -302,9 +302,9 @@ impl Objective for MinLossSumObjective
 struct MaxUniformityObjective { charts: AlignedChartDataSet }
 impl Objective for MaxUniformityObjective
 {
-    fn assess(&self, traits: &[f32]) -> f32
+    fn assess(&self, genome: &[f32]) -> f32
     {
-        let combined = self.charts.combine(&traits);
+        let combined = self.charts.combine(&genome);
         
         let start_value = *combined.first().unwrap() as f64;
         let end_value = *combined.last().unwrap() as f64;

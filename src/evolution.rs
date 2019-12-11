@@ -33,23 +33,24 @@ Please refer to the documentation of the specific traits below for details.
 The following global variables can be altered before(!) execution to modify behavior...
 */
 
-/// If set below 1.0, individual trait values are capped to this value.
-pub static mut TRAIT_MAX : f32 = 1.0;
-// If set above 0.0, individual trait values become 0.0 if they fall below.
-pub static mut TRAIT_MIN : f32 = 0.0;
+/// If set below 1.0, individual gene expression levels are capped to this value.
+pub static mut GENE_MAX: f32 = 1.0;
+// If set above 0.0, individual gene expression levels become 0.0 if they fall below.
+pub static mut GENE_MIN: f32 = 0.0;
 
 /// The exponentiality of the annealing function (see evolve method).
-pub static mut ANNEALING_EXP : f64 = 2.0;
+static ANNEALING_EXP : f64 = 2.0;
 /// Enable or disable extinction mode (see evolve method).
-pub static mut EXTINCTION_MODE : bool = true;
+static EXTINCTION_MODE : bool = true;
 
-// The minimum crossover coefficient for traits (experts only).
-pub static mut CROSS_MIN : f64 = 0.5;
+// The minimum crossover coefficient for genes (experts only).
+static CROSS_MIN : f64 = 0.5;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 use std::usize;
 use std::f32;
+use std::f64;
 use std::mem;
 use std::clone::Clone;
 use std::cmp::Ordering;
@@ -78,23 +79,23 @@ pub trait Objective
     ///
     /// The objective function (a.k.a. utility or fitness function) for the optimization.
     /// 
-    /// It receives the "traits" (n-dimensional unit vector) of a solution candidate 
+    /// It receives the "genome" (n-dimensional unit vector) of a solution candidate 
     /// and must return a number which is higher for solutions that are better.
     /// 
-    /// The length of trait vectors is determined when creating a Species / Ecosystem (see below).
+    /// The length of genome vectors is determined when creating a Species / Ecosystem (see below).
     /// 
-    fn assess(&self, traits : &[f32]) -> f32;
+    fn assess(&self, genome : &[f32]) -> f32;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///
-/// An individual represents a specific optimization solution, i.e. vector of trait expressions. 
+/// An individual represents a specific optimization solution, i.e. vector of gene expressions. 
 ///
 #[derive(Debug, Clone)]
 pub struct Individual
 {
-    traits: Vec<f32>,
+    genome: Vec<f32>,
     fitness: f32
 }
 
@@ -102,19 +103,19 @@ pub struct Individual
 impl Individual
 {
     ///
-    /// Creates a new individual with a given number of traits in a random state.
+    /// Creates a new individual with a given number of genes in a random state.
     /// 
-    fn new(num_traits : usize) -> Self
+    fn new(num_genes : usize) -> Self
     {
         //Spawning own RNG so the constructor does not require one to be passed.
         //This method is only used during initial species creation, so this is acceptable.
         let mut rng = XorShiftRng::from_rng(rand::thread_rng()).unwrap();
         
-        let mut traits = Vec::with_capacity(num_traits);
-        for _ in 0..num_traits {
-            traits.push(rng.gen_range(0.25, 1.0));
+        let mut genome = Vec::with_capacity(num_genes);
+        for _ in 0..num_genes {
+            genome.push(rng.gen_range(0.25, 1.0));
         }
-        let mut individual = Individual { traits, fitness : f32::NAN };
+        let mut individual = Individual { genome, fitness : f32::NAN };
         individual.normalize();
         return individual;
     }
@@ -124,41 +125,41 @@ impl Individual
     /// 
     fn normalize_scale(&mut self)
     {
-        let sum : f32 = self.traits.iter().sum();
+        let sum : f32 = self.genome.iter().sum();
         let scale : f32 = 1.0 / sum;
-        for value in self.traits.iter_mut() {
+        for value in self.genome.iter_mut() {
             *value *= scale;
         }
     }
     
     ///
-    /// Ensures that the current trait expression sums up to 1.0,
-    /// and that each entry respects the TRAIT_MIN / TRAIT_MAX constraints.
+    /// Ensures that the current gene expressions sum up to 1.0,
+    /// and that each entry respects the GENE_MIN / GENE_MAX constraints.
     /// 
     fn normalize(&mut self)
     {
         //begin with a naive normalization...
         self.normalize_scale();
         
-        let trait_min;
-        let trait_max;
+        let gene_min;
+        let gene_max;
         unsafe {
-            trait_min = TRAIT_MIN;
-            trait_max = TRAIT_MAX;
+            gene_min = GENE_MIN;
+            gene_max = GENE_MAX;
         }
         
         //perform iterative rebalance / normalize until both is satisfied...
         loop {
             let mut norm : f32 = 1.0;
             let mut sum : f32 = 0.0;
-            let mut count : usize = self.traits.len();
+            let mut count : usize = self.genome.len();
             
-            for value in self.traits.iter_mut() {
-                if *value < trait_min {
+            for value in self.genome.iter_mut() {
+                if *value < gene_min {
                     *value = 0.0;
-                } else if *value >= trait_max {
-                    *value = trait_max;
-                    norm -= trait_max;
+                } else if *value >= gene_max {
+                    *value = gene_max;
+                    norm -= gene_max;
                     count -= 1;
                 } else {
                     sum += *value;
@@ -166,7 +167,7 @@ impl Individual
             }
             
             if norm < 0.0 {
-                //We had to spent more than the entire unit length on max trait values.
+                //We had to spent more than the entire unit length on max gene values.
                 //Let's rescale and try that again...
                 self.normalize_scale();
                 continue;
@@ -178,8 +179,8 @@ impl Individual
             
             if sum == 0.0 {
                 //all non-saturated values are zero -> just fill them with equal distribution
-                let share = (norm / count as f32).min(trait_max);
-                for value in self.traits.iter_mut() {
+                let share = (norm / count as f32).min(gene_max);
+                for value in self.genome.iter_mut() {
                     if *value == 0.0 {
                         *value = share;
                     }
@@ -189,8 +190,8 @@ impl Individual
             
             let scale : f32 = norm / sum;
             let mut complete = true;
-            for value in self.traits.iter_mut() {
-                if (*value > 0.0) && (*value < trait_max) {
+            for value in self.genome.iter_mut() {
+                if (*value > 0.0) && (*value < gene_max) {
                     *value *= scale;
                     complete = false;
                 }
@@ -202,36 +203,31 @@ impl Individual
     }
     
     ///
-    /// Creates a new individual by randomly mixing traits with three other individuals,
+    /// Creates a new individual by randomly mixing genes with three other individuals,
     /// according to differential evolution algorithm. The crossover coefficient [0..1]
-    /// influences the probability and intensity of trait mixing. 
+    /// influences the probability and intensity of gene mixing. 
     /// 
     fn breed(&self, a: &Self, b: &Self, c: &Self, cross_coeff: f64, rng: &mut impl Rng) -> Self
     {
-        let mut traits = self.traits.clone();
+        let mut genome = self.genome.clone();
         
         let mut force_cross : usize;
         loop {
-            //pick one non-zero trait that will be crossed definitely
-            force_cross = rng.gen_range(0, traits.len());
-            if self.traits[force_cross] != 0.0 {
+            //pick one non-zero gene that will be crossed definitely
+            force_cross = rng.gen_range(0, genome.len());
+            if self.genome[force_cross] != 0.0 {
                 break;
             }
         }
         
-        let cross_min;
-        unsafe {
-            cross_min = CROSS_MIN;
-        }
-        
-        for i in 0..traits.len() {
+        for i in 0..genome.len() {
             if (i == force_cross) || rng.gen_bool(cross_coeff) {
-                traits[i] = a.traits[i] +
-                    (b.traits[i] - c.traits[i]) * ((cross_min + cross_coeff) as f32);
+                genome[i] = a.genome[i] +
+                    (b.genome[i] - c.genome[i]) * ((CROSS_MIN + cross_coeff) as f32);
             }
         }
         
-        let mut individual = Individual { traits, fitness : f32::NAN };
+        let mut individual = Individual { genome: genome, fitness : f32::NAN };
         individual.normalize();
         return individual;
     }
@@ -243,17 +239,17 @@ impl Individual
     }
     
     #[inline]
-    pub fn get_traits(&self) -> &Vec<f32>
+    pub fn get_genome(&self) -> &Vec<f32>
     {
-        return &self.traits;
+        return &self.genome;
     }
     
     ///
-    /// Generates an associative vector of traits and their indices, sorted by decending value.
+    /// Generates an associative vector of genes and their indices, sorted by decending value.
     /// 
-    pub fn enumerate_traits_sorted(&self) -> Vec<(usize, f32)>
+    pub fn enumerate_genes_sorted(&self) -> Vec<(usize, f32)>
     {
-        let mut res : Vec<_> = self.traits.iter().map(|x| *x).enumerate().collect();
+        let mut res : Vec<_> = self.genome.iter().map(|x| *x).enumerate().collect();
         //Using stable sort as readability of results may be of interest.
         res.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         return res;
@@ -286,7 +282,7 @@ impl Eq for Individual {}
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///
-/// A species is a collection of individuals that evolve together by recombining traits.
+/// A species is a collection of individuals that evolve together by recombining genes.
 ///
 #[derive(Debug, Clone)]
 pub struct Species
@@ -298,13 +294,13 @@ pub struct Species
 impl Species
 {
     ///
-    /// Creates a new species of given size each with a given number of traits in a random state.
+    /// Creates a new species of given size each with a given number of genes in a random state.
     /// 
-    pub fn new(num_individuals : usize, num_traits : usize) -> Species
+    pub fn new(num_individuals : usize, num_genes : usize) -> Species
     {
         let mut individuals = Vec::with_capacity(num_individuals);
         for _ in 0..num_individuals {
-            individuals.push(Individual::new(num_traits));
+            individuals.push(Individual::new(num_genes));
         }
         return Species { individuals };
     }
@@ -328,17 +324,10 @@ impl Species
     {
         //Determine fitnesses of first generation...
         for individual in self.individuals.iter_mut() {
-            individual.fitness = objective.assess(&individual.traits);
+            individual.fitness = objective.assess(&individual.genome);
         }
         
         let start_size = self.individuals.len();
-        
-        let annealing_exp;
-        let extinction_mode;
-        unsafe {
-            annealing_exp = ANNEALING_EXP;
-            extinction_mode = EXTINCTION_MODE;
-        }
         
         //We are using the XorShift RNG algo, which makes breeding about twice as fast.
         //However, note that breeding runtime is typically insignificant compared with assess().
@@ -349,21 +338,21 @@ impl Species
         //Procreate, rinse, repeat...
         for gen in 0..gens {
             
-            let heat = (1.0 - ((gen as f64) / (gens as f64))).powf(annealing_exp);
+            let heat = (1.0 - ((gen as f64) / (gens as f64))).powf(ANNEALING_EXP);
             
             let mut worst_fitness = f32::INFINITY;
             let mut worst_index = usize::max_value();
             
             let mut offspring = self.breed_all(heat, &mut rng);
             for individual in offspring.iter_mut() {
-                individual.fitness = objective.assess(&individual.traits);
+                individual.fitness = objective.assess(&individual.genome);
             }
             
             for i in 0..self.individuals.len() {
                 let mut fitness = self.individuals[i].fitness;
                 if offspring[i].fitness > fitness {
                     fitness = offspring[i].fitness;
-                    //Memory swap avoids deep clone of individual trait vector.
+                    //Memory swap avoids deep clone of individual genome vector.
                     mem::swap(&mut self.individuals[i], &mut offspring[i]);
                 }
                 if fitness > best_fitness {
@@ -375,7 +364,7 @@ impl Species
                 }
             }
             
-            if extinction_mode {
+            if EXTINCTION_MODE {
                 //Note: We must preserve at least 3 individuals for breeding to work.
                 let num_dead = ((start_size - 3) as f64) * (1.0 - heat);
                 let num_alive = start_size - (num_dead.round() as usize);
@@ -399,7 +388,7 @@ impl Species
         
         for individual in self.individuals.iter() {
             //Note: May choose itself as a mate - not ideal but not a big problem either,
-            //since offspring traits are generated from the difference between mates.
+            //since offspring genes are generated from the difference between mates.
             let mut mates = self.individuals.choose_multiple(rng, 3);
             offspring.push(
                 individual.breed(
@@ -442,13 +431,13 @@ pub struct Ecosystem
 impl Ecosystem
 {
     ///
-    /// Creates a new ecosystem with a given number of species, individuals and traits.
+    /// Creates a new ecosystem with a given number of species, individuals and genes.
     /// 
-    pub fn new(num_species : usize, num_individuals : usize, num_traits : usize) -> Ecosystem
+    pub fn new(num_species : usize, num_individuals : usize, num_genes : usize) -> Ecosystem
     {
         let mut species = Vec::with_capacity(num_species);
         for _ in 0..num_species {
-            species.push(Species::new(num_individuals, num_traits));
+            species.push(Species::new(num_individuals, num_genes));
         }
         return Ecosystem { species };
     }
@@ -512,14 +501,14 @@ impl Ecosystem
     }
 
     ///
-    /// Returns a pseudo-individual with traits which are the arithmetic mean
-    /// between the traits of the fittest individuals across the fittest species.
+    /// Returns a pseudo-individual with genes which are the arithmetic mean
+    /// between the genes of the fittest individuals across the fittest species.
     /// The fitness of the pseudo-individual is also averaged (strictly incorrect, see below).
     ///
     /// Note that this is not a mathmatically correct approach for a strict optimization problem,
     /// since the average coordinates of multiple maxima are not guaranteed to be another maximum!
     /// However, this can be a useful approach for obtaining more stable results, if the goal is
-    /// merely to identify which traits have a higher impact on result quality across many runs.
+    /// merely to identify which genes have a higher impact on result quality across many runs.
     ///
     pub fn average_fittest_individuals(&self, num_species: usize) -> Individual
     {
@@ -528,17 +517,17 @@ impl Ecosystem
         fittest_per_species.reverse();
         fittest_per_species.truncate(num_species);
         
-        let num_traits = fittest_per_species[0].traits.len();
-        let mut traits = Vec::with_capacity(num_traits);
+        let num_genes = fittest_per_species[0].genome.len();
+        let mut genome = Vec::with_capacity(num_genes);
         
         let norm = 1.0 / (fittest_per_species.len() as f32);
         
-        for i in 0..num_traits {
+        for i in 0..num_genes {
             let mut avg : f32 = 0.0;
             for individual in fittest_per_species.iter() {
-                avg += individual.traits[i] * norm;
+                avg += individual.genome[i] * norm;
             }
-            traits.push(avg);
+            genome.push(avg);
         }
         
         let mut fitness : f32 = 0.0;
@@ -546,6 +535,6 @@ impl Ecosystem
             fitness += individual.fitness * norm;
         }
         
-        return Individual { traits, fitness };
+        return Individual { genome, fitness };
     }
 }
