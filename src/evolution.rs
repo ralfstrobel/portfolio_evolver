@@ -33,11 +33,6 @@ Please refer to the documentation of the specific traits below for details.
 The following global variables can be altered before(!) execution to modify behavior...
 */
 
-/// If set below 1.0, individual gene expression levels are capped to this value.
-pub static mut GENE_MAX: f32 = 1.0;
-// If set above 0.0, individual gene expression levels become 0.0 if they fall below.
-pub static mut GENE_MIN: f32 = 0.0;
-
 /// The exponentiality of the annealing function (see evolve method).
 static ANNEALING_EXP : f64 = 2.0;
 /// Enable or disable extinction mode (see evolve method).
@@ -90,32 +85,97 @@ pub trait Objective
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///
+/// A genepool is a meta-descriptor for a set of available genes.
+/// It defines which genes are available, as well as their possible expression ranges.
+///
+#[derive(Debug, Clone)]
+pub struct Genepool
+{
+    gene_minima: Vec<f32>,
+    gene_maxima: Vec<f32>,
+}
+
+#[allow(dead_code)]
+impl Genepool
+{
+    ///
+    /// Creates a genepool containing a given number of genes,
+    /// all of which simply have the maximum possible range of 0..1
+    ///
+    pub fn new_unconstrained(num_genes : usize) -> Self
+    {
+        return Self::from_global_constraints(num_genes, 0.0, 1.0);
+    }
+    
+    ///
+    /// Creates a genepool containing a given number of genes,
+    /// all of which share the same range constraints.
+    ///
+    pub fn from_global_constraints(num_genes : usize, gene_min: f32, gene_max: f32) -> Self
+    {
+        let mut gene_minima = Vec::with_capacity(num_genes);
+        let mut gene_maxima = Vec::with_capacity(num_genes);
+        for _ in 0..num_genes {
+            gene_minima.push(gene_min);
+            gene_maxima.push(gene_max);
+        }
+        return Genepool { gene_minima, gene_maxima };
+    }
+
+    ///
+    /// Creates a genepool for individual gene maxima, but with no minima (all 0.0).
+    ///
+    pub fn from_individual_maxima(gene_maxima: &Vec<f32>) -> Self
+    {
+        let gene_minima = vec![0.0; gene_maxima.len()];
+        return Genepool { gene_minima, gene_maxima: gene_maxima.clone() };
+    }
+    
+    ///
+    /// Creates a genepool from individual gene maxima and minima.
+    ///
+    pub fn from_individual_constraints(gene_minima: &Vec<f32>, gene_maxima: &Vec<f32>) -> Self
+    {
+        assert_eq!(gene_minima.len(), gene_maxima.len());
+        return Genepool { gene_minima: gene_minima.clone(), gene_maxima: gene_maxima.clone() };
+    }
+    
+    #[inline]
+    fn size(&self) -> usize
+    {
+        return self.gene_maxima.len();
+    }
+}
+
+///
 /// An individual represents a specific optimization solution, i.e. vector of gene expressions. 
 ///
 #[derive(Debug, Clone)]
-pub struct Individual
+pub struct Individual<'a>
 {
+    genepool: &'a Genepool,
     genome: Vec<f32>,
     fitness: f32
 }
 
 #[allow(dead_code)]
-impl Individual
+impl<'a> Individual<'a>
 {
     ///
     /// Creates a new individual with a given number of genes in a random state.
-    /// 
-    fn new(num_genes : usize) -> Self
+    ///
+    fn new(genepool: &'a Genepool) -> Self
     {
         //Spawning own RNG so the constructor does not require one to be passed.
         //This method is only used during initial species creation, so this is acceptable.
         let mut rng = XorShiftRng::from_rng(rand::thread_rng()).unwrap();
         
+        let num_genes = genepool.size();
         let mut genome = Vec::with_capacity(num_genes);
         for _ in 0..num_genes {
             genome.push(rng.gen_range(0.25, 1.0));
         }
-        let mut individual = Individual { genome, fitness : f32::NAN };
+        let mut individual = Individual { genepool, genome, fitness : f32::NAN };
         individual.normalize();
         return individual;
     }
@@ -141,29 +201,33 @@ impl Individual
         //begin with a naive normalization...
         self.normalize_scale();
         
-        let gene_min;
-        let gene_max;
-        unsafe {
-            gene_min = GENE_MIN;
-            gene_max = GENE_MAX;
-        }
-        
         //perform iterative rebalance / normalize until both is satisfied...
         loop {
             let mut norm : f32 = 1.0;
             let mut sum : f32 = 0.0;
             let mut count : usize = self.genome.len();
             
-            for value in self.genome.iter_mut() {
+            for (i, value) in self.genome.iter_mut().enumerate() {
+                
+                let gene_min = self.genepool.gene_minima[i];
                 if *value < gene_min {
                     *value = 0.0;
-                } else if *value >= gene_max {
+                    continue;
+                }
+                
+                let gene_max = self.genepool.gene_maxima[i];
+                if *value >= gene_max {
                     *value = gene_max;
                     norm -= gene_max;
                     count -= 1;
-                } else {
-                    sum += *value;
+                    continue;
                 }
+                
+                sum += *value;
+            }
+            
+            if (sum - norm).abs() < 1e-5 {
+                return;
             }
             
             if norm < 0.0 {
@@ -173,24 +237,22 @@ impl Individual
                 continue;
             }
             
-            if (sum - norm).abs() < 1e-5 {
-                return;
-            }
-            
             if sum == 0.0 {
                 //all non-saturated values are zero -> just fill them with equal distribution
-                let share = (norm / count as f32).min(gene_max);
-                for value in self.genome.iter_mut() {
+                let share = norm / count as f32;
+                for (i, value) in self.genome.iter_mut().enumerate() {
                     if *value == 0.0 {
-                        *value = share;
+                        let gene_max = self.genepool.gene_maxima[i];
+                        *value = share.min(gene_max);
                     }
                 }
-                return;
+                continue;
             }
             
             let scale : f32 = norm / sum;
             let mut complete = true;
-            for value in self.genome.iter_mut() {
+            for (i, value) in self.genome.iter_mut().enumerate() {
+                let gene_max = self.genepool.gene_maxima[i];
                 if (*value > 0.0) && (*value < gene_max) {
                     *value *= scale;
                     complete = false;
@@ -227,7 +289,7 @@ impl Individual
             }
         }
         
-        let mut individual = Individual { genome: genome, fitness : f32::NAN };
+        let mut individual = Individual { genepool: self.genepool, genome, fitness : f32::NAN };
         individual.normalize();
         return individual;
     }
@@ -256,28 +318,28 @@ impl Individual
     }
 }
 
-impl Ord for Individual
+impl<'a> Ord for Individual<'a>
 {
     fn cmp(&self, other: &Self) -> Ordering {
         return self.fitness.partial_cmp(&other.fitness).unwrap_or(Ordering::Equal);
     }
 }
 
-impl PartialOrd for Individual
+impl<'a> PartialOrd for Individual<'a>
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         return self.fitness.partial_cmp(&other.fitness);
     }
 }
 
-impl PartialEq for Individual
+impl<'a> PartialEq for Individual<'a>
 {
     fn eq(&self, other: &Self) -> bool {
         return self.fitness == other.fitness;
     }
 }
 
-impl Eq for Individual {}
+impl<'a> Eq for Individual<'a> {}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -285,22 +347,22 @@ impl Eq for Individual {}
 /// A species is a collection of individuals that evolve together by recombining genes.
 ///
 #[derive(Debug, Clone)]
-pub struct Species
+pub struct Species<'a>
 {
-    individuals: Vec<Individual>
+    individuals: Vec<Individual<'a>>
 }
 
 #[allow(dead_code)]
-impl Species
+impl<'a> Species<'a>
 {
     ///
     /// Creates a new species of given size each with a given number of genes in a random state.
     /// 
-    pub fn new(num_individuals : usize, num_genes : usize) -> Species
+    pub fn new(genepool: &'a Genepool, num_individuals: usize) -> Self
     {
         let mut individuals = Vec::with_capacity(num_individuals);
         for _ in 0..num_individuals {
-            individuals.push(Individual::new(num_genes));
+            individuals.push(Individual::new(genepool));
         }
         return Species { individuals };
     }
@@ -382,7 +444,7 @@ impl Species
     ///
     /// Creates the next generation of this species by breeding each individual with random mates.
     /// 
-    fn breed_all(&self, cross_coeff: f64, rng: &mut impl Rng) -> Vec<Individual>
+    fn breed_all(&self, cross_coeff: f64, rng: &mut impl Rng) -> Vec<Individual<'a>>
     {
         let mut offspring = Vec::with_capacity(self.individuals.len());
         
@@ -422,22 +484,22 @@ impl Species
 /// of the objective function contains many minor maxima in which individuals can get stuck.
 ///
 #[derive(Debug, Clone)]
-pub struct Ecosystem
+pub struct Ecosystem<'a>
 {
-    species: Vec<Species>
+    species: Vec<Species<'a>>
 }
 
 #[allow(dead_code)]
-impl Ecosystem
+impl<'a> Ecosystem<'a>
 {
     ///
     /// Creates a new ecosystem with a given number of species, individuals and genes.
     /// 
-    pub fn new(num_species : usize, num_individuals : usize, num_genes : usize) -> Ecosystem
+    pub fn new(genepool: &'a Genepool, num_species: usize, num_individuals: usize) -> Self
     {
         let mut species = Vec::with_capacity(num_species);
         for _ in 0..num_species {
-            species.push(Species::new(num_individuals, num_genes));
+            species.push(Species::new(genepool, num_individuals));
         }
         return Ecosystem { species };
     }
@@ -517,7 +579,8 @@ impl Ecosystem
         fittest_per_species.reverse();
         fittest_per_species.truncate(num_species);
         
-        let num_genes = fittest_per_species[0].genome.len();
+        let genepool = fittest_per_species[0].genepool;
+        let num_genes = genepool.size();
         let mut genome = Vec::with_capacity(num_genes);
         
         let norm = 1.0 / (fittest_per_species.len() as f32);
@@ -535,6 +598,6 @@ impl Ecosystem
             fitness += individual.fitness * norm;
         }
         
-        return Individual { genome, fitness };
+        return Individual { genepool, genome, fitness };
     }
 }

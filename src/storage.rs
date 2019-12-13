@@ -47,7 +47,18 @@ const PORTFOLIO_DIRECTORY : &str = "../portfolios/";
 const DATA_DIRECTORY : &str = "../data/";
 
 const EXTENSION_JSON : &str = ".json";
-const EXTENSION_TEXT_LOG : &str = ".txt"; 
+const EXTENSION_TEXT_LOG : &str = ".txt";
+
+const DEBUG_LOG_FILE_NAME : &str = "../tmp/debug.log";
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[allow(dead_code)]
+pub fn debug_log(text: &str)
+{
+    let mut file = OpenOptions::new().create(true).append(true).open(DEBUG_LOG_FILE_NAME).unwrap();
+    file.write_all(text.as_bytes()).unwrap();
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -169,7 +180,7 @@ impl Portfolio
     /// Collects a (floating point) property across all assets within the portfolio.
     /// The returned vector aligns with the keys returned by the keys() function.
     ///
-    pub fn get_mapped_property(&mut self, property_name : &str) -> Vec<f32>
+    pub fn get_mapped_property(&self, property_name : &str, default: f32) -> Vec<f32>
     {
         let mut values = Vec::new();
         for item in self.json.values() {
@@ -178,7 +189,7 @@ impl Portfolio
                 continue;
             }
             let value = match item.get(property_name) {
-                Option::None => 0.0,
+                Option::None => default,
                 Option::Some(val) => val.as_f64().unwrap() as f32
             };
             values.push(value);
@@ -278,6 +289,9 @@ impl ChartData
         
         if start_timestamp == 0 {
             panic!("No data points of {} in selected interval.", name);
+        }
+        if (from_time > 0) && (start_timestamp > from_time) {
+            panic!("Data set {} does not begin until after requested start date.", name);
         }
         
         return ChartData {

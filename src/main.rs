@@ -31,7 +31,6 @@ use evolution::*;
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 const PORTFOLIO_ENV : &str = "PORTFOLIO";
-const PORTFOLIO_DEFAULT : &str = "low_risk";
 
 const DATE_FROM_ENV : &str = "DATE_FROM";
 const DATE_TO_ENV : &str = "DATE_TO";
@@ -47,8 +46,10 @@ const OBJECTIVE_NAME_MAX_UNI : &str = "max_uni";
 const OBJECTIVE_SUFFIX_ENV : &str = "OPTIMIZATION_NAME_SUFFIX";
 const SAVE_RESULTS_ENV : &str = "SAVE_RESULTS";
 
-const GENE_POPULATION_ENV: &str = "GENE_POPULATION";
-const GENE_POPULATION_DEFAULT: &str = "16";
+const NUM_SPECIES_ENV: &str = "NUM_SPECIES";
+const NUM_SPECIES_DEFAULT: &str = "35";
+const NUM_INDIVIDUALS_PER_GENE_ENV: &str = "NUM_INDIVIDUALS_PER_GENE";
+const NUM_INDIVIDUALS_PER_GENE_DEFAULT: &str = "16";
 const GENE_MAX_ENV: &str = "GENE_MAX";
 const GENE_MAX_DEFAULT: &str = "0.15";
 
@@ -79,8 +80,7 @@ fn main() {
     
     //Initialize environment variables ...
     
-    let portfolio_name = env::var(PORTFOLIO_ENV)
-        .unwrap_or(String::from(PORTFOLIO_DEFAULT));
+    let portfolio_name = env::var(PORTFOLIO_ENV).unwrap();
     
     let from_time : i64 = match env::var(DATE_FROM_ENV) {
         Ok(date_from) => {
@@ -107,21 +107,29 @@ fn main() {
         Err(_) => true
     };
     
-    let gene_population_factor = env::var(GENE_POPULATION_ENV)
-        .unwrap_or(String::from(GENE_POPULATION_DEFAULT))
+    let num_species = env::var(NUM_SPECIES_ENV)
+        .unwrap_or(String::from(NUM_SPECIES_DEFAULT))
         .parse::<usize>().unwrap();
     
-    unsafe {
-        evolution::GENE_MAX = env::var(GENE_MAX_ENV)
-            .unwrap_or(String::from(GENE_MAX_DEFAULT))
-            .parse::<f32>().unwrap();
-    }
+    let individuals_per_gene = env::var(NUM_INDIVIDUALS_PER_GENE_ENV)
+        .unwrap_or(String::from(NUM_INDIVIDUALS_PER_GENE_DEFAULT))
+        .parse::<usize>().unwrap();
+    
+    let gene_maximum = env::var(GENE_MAX_ENV)
+        .unwrap_or(String::from(GENE_MAX_DEFAULT))
+        .parse::<f32>().unwrap();
     
     //Load data...
     
     let mut portfolio = Portfolio::load(&portfolio_name);
     let asset_ids = portfolio.get_keys();
     let asset_titles = portfolio.get_titles();
+    
+    let gene_max_property_name = format!("max_percent_{}{}", objective_name, objective_name_suffix);
+    let asset_gene_maxima = portfolio
+        .get_mapped_property(&gene_max_property_name, 100.0)
+        .iter().map(|x| (x * 0.01).min(gene_maximum)).collect();
+    
     println!("Loaded portfolio {}.", portfolio_name);
     
     let charts = AlignedChartDataSet::load(&asset_ids, from_time, to_times);
@@ -136,10 +144,9 @@ fn main() {
     //Run Simulation...
     
     let num_genes = charts.len();
-    let num_individuals = gene_population_factor * num_genes;
-    let num_generations = 2 * num_individuals;
-    let num_species = 35;
-    let num_results_averaged = 15;
+    let num_individuals = individuals_per_gene * num_genes;
+    let num_generations = num_individuals * 2;
+    let num_results_averaged = (num_species / 2).max(1);
     
     println!(
         "\nEvolving {} species of {} individuals with {} genes for {} generations, selecting for '{}'...",
@@ -150,7 +157,10 @@ fn main() {
         objective_name
     );
     
-    let mut ecosystem = Ecosystem::new(num_species, num_individuals, num_genes);
+    //debug_log(&format!("{:?}\n", asset_ids));
+    
+    let genepool = Genepool::from_individual_maxima(&asset_gene_maxima);
+    let mut ecosystem = Ecosystem::new(&genepool, num_species, num_individuals);
     match objective_name.as_str() {
         OBJECTIVE_NAME_MAX_PERF => {
             let objective = MaxPerformanceObjective { charts };
@@ -252,6 +262,8 @@ impl Objective for MinLossObjective
         if current_dd != 0.0 {
             deepest_dd = deepest_dd.max(current_dd);
         }
+        
+        //debug_log(&format!("{:.10?} >> {:.5}\n", genome, deepest_dd));
         
         return -deepest_dd;
     }
