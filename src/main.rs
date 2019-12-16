@@ -42,6 +42,7 @@ const OBJECTIVE_NAME_MIN_LOSS : &str = "min_loss";
 const OBJECTIVE_NAME_MIN_DAY_LOSS : &str = "min_day_loss";
 const OBJECTIVE_NAME_MIN_LOSS_SUM : &str = "min_loss_sum";
 const OBJECTIVE_NAME_MAX_UNI : &str = "max_uni";
+const OBJECTIVE_NAME_MAX_UNI_PERF : &str = "max_uni_perf";
 
 const OBJECTIVE_SUFFIX_ENV : &str = "OPTIMIZATION_NAME_SUFFIX";
 const SAVE_RESULTS_ENV : &str = "SAVE_RESULTS";
@@ -179,7 +180,11 @@ fn main() {
             ecosystem.evolve(num_generations, &objective);
         },
         OBJECTIVE_NAME_MAX_UNI => {
-            let objective = MaxUniformityObjective { charts };
+            let objective = MaxUniformityObjective { charts, uni_exp: 1.0, perf_exp: 0.0 };
+            ecosystem.evolve(num_generations, &objective);
+        },
+        OBJECTIVE_NAME_MAX_UNI_PERF => {
+            let objective = MaxUniformityObjective { charts, uni_exp: 0.25, perf_exp: 4.0 };
             ecosystem.evolve(num_generations, &objective);
         },
         _ => panic!("Unknown objective: {}", objective_name),
@@ -311,7 +316,7 @@ impl Objective for MinLossSumObjective
     }
 }
 
-struct MaxUniformityObjective { charts: AlignedChartDataSet }
+struct MaxUniformityObjective { charts: AlignedChartDataSet, uni_exp: f64, perf_exp: f64 }
 impl Objective for MaxUniformityObjective
 {
     fn assess(&self, genome: &[f32]) -> f32
@@ -333,6 +338,6 @@ impl Objective for MaxUniformityObjective
             sqr_diff_sum += (gain - expected_gain).powf(2.0);
         }
         
-        return -sqr_diff_sum as f32;
+        return ((total_gain + 1.0).powf(self.perf_exp) / sqr_diff_sum.powf(self.uni_exp)) as f32;
     }
 }
