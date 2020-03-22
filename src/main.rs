@@ -38,9 +38,13 @@ const DATE_FORMAT : &str = "%Y-%m-%d";
 
 const OBJECTIVE_ENV : &str = "OPTIMIZATION_TARGET";
 const OBJECTIVE_NAME_MAX_PERF : &str = "max_performance";
-const OBJECTIVE_NAME_MIN_LOSS : &str = "min_loss";
 const OBJECTIVE_NAME_MIN_DAY_LOSS : &str = "min_day_loss";
+const OBJECTIVE_NAME_MIN_LOSS : &str = "min_loss";
 const OBJECTIVE_NAME_MIN_LOSS_SUM : &str = "min_loss_sum";
+const OBJECTIVE_NAME_MIN_LOSS_LENGTH : &str = "min_loss_length";
+const OBJECTIVE_NAME_MIN_LOSS_AREA: &str = "min_loss_area";
+const OBJECTIVE_NAME_MAX_GAIN_SUM : &str = "max_gain_sum";
+const OBJECTIVE_NAME_MAX_GAIN_LENGTH : &str = "max_gain_length";
 const OBJECTIVE_NAME_MAX_UNI : &str = "max_uni";
 const OBJECTIVE_NAME_MAX_UNI_PERF : &str = "max_uni_perf";
 
@@ -126,10 +130,9 @@ fn main() {
     let asset_ids = portfolio.get_keys();
     let asset_titles = portfolio.get_titles();
     
-    let gene_max_property_name = format!("max_percent_{}{}", objective_name, objective_name_suffix);
     let asset_gene_maxima = portfolio
-        .get_mapped_property(&gene_max_property_name, 100.0)
-        .iter().map(|x| (x * 0.01).min(gene_maximum)).collect();
+        .get_mapped_property("max_percent", gene_maximum * 100.0)
+        .iter().map(|x| x * 0.01).collect();
     
     println!("Loaded portfolio {}.", portfolio_name);
     
@@ -167,16 +170,32 @@ fn main() {
             let objective = MaxPerformanceObjective { charts };
             ecosystem.evolve(num_generations, &objective);
         },
-        OBJECTIVE_NAME_MIN_LOSS => {
-            let objective = MinLossObjective { charts };
-            ecosystem.evolve(num_generations, &objective);
-        },
         OBJECTIVE_NAME_MIN_DAY_LOSS => {
             let objective = MinDayLossObjective { charts };
             ecosystem.evolve(num_generations, &objective);
         },
+        OBJECTIVE_NAME_MIN_LOSS => {
+            let objective = MinLossObjective { charts };
+            ecosystem.evolve(num_generations, &objective);
+        },
         OBJECTIVE_NAME_MIN_LOSS_SUM => {
-            let objective = MinLossSumObjective { charts };
+            let objective = MinLossSumObjective { charts, threshold : 0.01, exp: 1.2 };
+            ecosystem.evolve(num_generations, &objective);
+        },
+        OBJECTIVE_NAME_MIN_LOSS_LENGTH => {
+            let objective = MinLossLengthObjective { charts, threshold : 0.01, exp: 1.2 };
+            ecosystem.evolve(num_generations, &objective);
+        },
+        OBJECTIVE_NAME_MIN_LOSS_AREA => {
+            let objective = MinLossAreaObjective { charts, threshold : 0.01, exp: 1.2 };
+            ecosystem.evolve(num_generations, &objective);
+        },
+        OBJECTIVE_NAME_MAX_GAIN_SUM => {
+            let objective = MaxGainSumObjective { charts, exp: 0.8 };
+            ecosystem.evolve(num_generations, &objective);
+        },
+        OBJECTIVE_NAME_MAX_GAIN_LENGTH => {
+            let objective = MaxGainLengthObjective { charts, loss_tolerance: 0.025, exp: 1.0 };
             ecosystem.evolve(num_generations, &objective);
         },
         OBJECTIVE_NAME_MAX_UNI => {
@@ -242,47 +261,15 @@ impl Objective for MaxPerformanceObjective
     }
 }
 
-struct MinLossObjective { charts: AlignedChartDataSet }
-impl Objective for MinLossObjective
-{
-    fn assess(&self, genome: &[f32]) -> f32
-    {
-        let combined = self.charts.combine(&genome);
-        
-        let mut current_max = combined[0];
-        let mut current_dd : f32 = 0.0;
-        let mut deepest_dd : f32 = 0.0;
-        
-        for value in combined.iter() {
-            if *value < current_max {
-                current_dd = current_dd.max(1.0 - (value / current_max));
-            } else {
-                current_max = *value;
-                if current_dd != 0.0 {
-                    deepest_dd = deepest_dd.max(current_dd);
-                    current_dd = 0.0;
-                }
-            }
-        }
-        if current_dd != 0.0 {
-            deepest_dd = deepest_dd.max(current_dd);
-        }
-        
-        //debug_log(&format!("{:.10?} >> {:.5}\n", genome, deepest_dd));
-        
-        return -deepest_dd;
-    }
-}
-
 struct MinDayLossObjective { charts: AlignedChartDataSet }
 impl Objective for MinDayLossObjective
 {
     fn assess(&self, genome: &[f32]) -> f32
     {
         let combined = self.charts.combine(&genome);
-        
+
         let mut max_loss : f32 = 0.0;
-        
+
         let mut prev = combined.first().unwrap();
         for value in combined.iter() {
             if value < prev {
@@ -290,29 +277,182 @@ impl Objective for MinDayLossObjective
             }
             prev = value;
         }
-        
+
         return -max_loss;
     }
 }
 
-struct MinLossSumObjective { charts: AlignedChartDataSet }
+struct MinLossObjective { charts: AlignedChartDataSet }
+impl Objective for MinLossObjective
+{
+    fn assess(&self, genome: &[f32]) -> f32
+    {
+        let combined = self.charts.combine(&genome);
+        
+        let mut current_top = combined[0];
+        let mut current_loss: f32 = 0.0;
+        let mut result: f32 = 0.0;
+        
+        for value in combined.iter() {
+            if *value < current_top {
+                current_loss = current_loss.max(1.0 - (value / current_top));
+            } else {
+                current_top = *value;
+                if current_loss != 0.0 {
+                    result = result.max(current_loss);
+                    current_loss = 0.0;
+                }
+            }
+        }
+        if current_loss != 0.0 {
+            result = result.max(current_loss);
+        }
+        
+        //debug_log(&format!("{:.10?} >> {:.5}\n", genome, deepest_dd));
+        
+        return -result;
+    }
+}
+
+struct MinLossSumObjective { charts: AlignedChartDataSet, threshold: f64, exp: f64 }
 impl Objective for MinLossSumObjective
 {
     fn assess(&self, genome: &[f32]) -> f32
     {
         let combined = self.charts.combine(&genome);
         
-        let mut loss_sum : f64 = 0.0;
+        let mut current_top = combined[0];
+        let mut current_loss: f64 = 0.0;
+        let mut result: f64 = 0.0;
         
-        let mut prev = *combined.first().unwrap();
         for value in combined.iter() {
-            if *value < prev {
-                loss_sum += 1.0 - ((*value as f64) / (prev as f64));
+            if *value < current_top {
+                current_loss = current_loss.max(
+                    1.0 - ((*value as f64) / (current_top as f64))
+                );
+            } else {
+                if current_loss >= self.threshold {
+                    result += current_loss.powf(self.exp);
+                }
+                current_top = *value;
+                current_loss = 0.0;
             }
-            prev = *value;
+        }
+        if current_loss >= self.threshold {
+            result += current_loss.powf(self.exp);
         }
         
-        return -loss_sum as f32;
+        return -result as f32;
+    }
+}
+
+struct MinLossLengthObjective { charts: AlignedChartDataSet, threshold: f64, exp: f64 }
+impl Objective for MinLossLengthObjective
+{
+    fn assess(&self, genome: &[f32]) -> f32
+    {
+        let combined = self.charts.combine(&genome);
+        
+        let mut current_top: f32 = combined[0];
+        let mut current_top_time: usize = 0;
+        let mut current_loss: f64 = 0.0;
+        let mut current_loss_length: usize = 0;
+        let mut result: f64 = 0.0;
+        
+        for (time, value) in combined.iter().enumerate() {
+            if *value < current_top {
+                current_loss = current_loss.max(
+                    1.0 - ((*value as f64) / (current_top as f64))
+                );
+                current_loss_length = time - current_top_time;
+            } else {
+                if current_loss >= self.threshold {
+                    result += (current_loss_length as f64).powf(self.exp);
+                }
+                current_top = *value;
+                current_top_time = time;
+                current_loss = 0.0;
+            }
+        }
+        if current_loss >= self.threshold {
+            result += (current_loss_length as f64).powf(self.exp);
+        }
+        
+        return -result as f32;
+    }
+}
+
+struct MinLossAreaObjective { charts: AlignedChartDataSet, threshold: f64, exp: f64 }
+impl Objective for MinLossAreaObjective
+{
+    fn assess(&self, genome: &[f32]) -> f32
+    {
+        let combined = self.charts.combine(&genome);
+        
+        let mut current_top: f32 = combined[0];
+        let mut result: f64 = 0.0;
+        
+        for value in combined.iter() {
+            if *value < current_top {
+                let current_loss = 1.0 - ((*value as f64) / (current_top as f64));
+                if current_loss >= self.threshold {
+                    result += current_loss.powf(self.exp);
+                }
+            } else {
+                current_top = *value;
+            }
+        }
+        
+        return -result as f32;
+    }
+}
+
+struct MaxGainSumObjective { charts: AlignedChartDataSet, exp: f64 }
+impl Objective for MaxGainSumObjective
+{
+    fn assess(&self, genome: &[f32]) -> f32
+    {
+        let combined = self.charts.combine(&genome);
+        
+        let mut current_top = combined[0];
+        let mut result: f64 = 0.0;
+        
+        for value in combined.iter() {
+            if *value > current_top {
+                result += (((*value as f64) / (current_top as f64)) - 1.0).powf(self.exp);
+                current_top = *value;
+            }
+        }
+        
+        return result as f32;
+    }
+}
+
+struct MaxGainLengthObjective { charts: AlignedChartDataSet, loss_tolerance: f32, exp: f64 }
+impl Objective for MaxGainLengthObjective
+{
+    fn assess(&self, genome: &[f32]) -> f32
+    {
+        let combined = self.charts.combine(&genome);
+        
+        let mut current_top = combined[0];
+        let mut current_gain_length: usize = 0;
+        let mut result: f64 = 0.0;
+        
+        for value in combined.iter() {
+            if *value > current_top {
+                current_top = *value;
+                current_gain_length += 1;
+            } else {
+                let current_loss = 1.0 - (*value / current_top);
+                if current_loss > self.loss_tolerance {
+                    result += (current_gain_length as f64).powf(self.exp);
+                    current_gain_length = 0;
+                }
+            }
+        }
+        result += (current_gain_length as f64).powf(self.exp);
+        return result as f32;
     }
 }
 
