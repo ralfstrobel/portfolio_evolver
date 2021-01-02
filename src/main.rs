@@ -135,116 +135,29 @@ fn main() {
     let asset_ids = portfolio.get_keys();
     let asset_titles = portfolio.get_titles();
 
-    let asset_gene_maxima = portfolio
+    let asset_maxima = portfolio
         .get_mapped_property("max_percent", gene_maximum * 100.0)
         .iter()
         .map(|x| x * 0.01)
         .collect();
 
     println!("Loaded portfolio {}.", portfolio_name);
-
-    let charts = AlignedChartDataSet::load(&asset_ids, from_time, to_times);
-    println!(
-        "Loaded {} data sets with {} data points each, spaning from {} to {}.",
-        charts.len(),
-        charts.chart_len(),
-        NaiveDateTime::from_timestamp(charts.get_start_timestamp() / 1000, 0).date(),
-        NaiveDateTime::from_timestamp(charts.get_end_timestamp() / 1000, 0).date(),
-    );
-
-    //Run Simulation...
-
-    let num_genes = charts.len();
-    let num_individuals = individuals_per_gene * num_genes;
-    let num_generations = num_individuals * 2;
-    let num_results_averaged = (num_species / 2).max(1);
-
-    println!(
-        "\nEvolving {} species of {} individuals with {} genes for {} generations, selecting for '{}'...",
-        num_species,
-        num_individuals,
-        num_genes,
-        num_generations,
-        objective_name
-    );
-
     //debug_log(&format!("{:?}\n", asset_ids));
 
-    let genepool = Genepool::from_individual_maxima(&asset_gene_maxima);
-    let mut ecosystem = Ecosystem::new(&genepool, num_species, num_individuals);
-    match objective_name.as_str() {
-        OBJECTIVE_NAME_MAX_PERF => {
-            let objective = MaxPerformanceObjective { charts };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MIN_DAY_LOSS => {
-            let objective = MinDayLossObjective { charts };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MIN_LOSS => {
-            let objective = MinLossObjective { charts };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MIN_LOSS_SUM => {
-            let objective = MinLossSumObjective {
-                charts,
-                threshold: 0.01,
-                exp: 1.2,
-            };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MIN_LOSS_LENGTH => {
-            let objective = MinLossLengthObjective {
-                charts,
-                threshold: 0.01,
-                exp: 1.2,
-            };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MIN_LOSS_AREA => {
-            let objective = MinLossAreaObjective {
-                charts,
-                threshold: 0.01,
-                exp: 1.2,
-            };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MAX_GAIN_SUM => {
-            let objective = MaxGainSumObjective { charts, exp: 0.8 };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MAX_GAIN_LENGTH => {
-            let objective = MaxGainLengthObjective {
-                charts,
-                loss_tolerance: 0.025,
-                exp: 1.0,
-            };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MAX_UNI => {
-            let objective = MaxUniformityObjective {
-                charts,
-                uni_exp: 1.0,
-                perf_exp: 0.0,
-            };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        OBJECTIVE_NAME_MAX_UNI_PERF => {
-            let objective = MaxUniformityObjective {
-                charts,
-                uni_exp: 0.25,
-                perf_exp: 4.0,
-            };
-            ecosystem.evolve(num_generations, &objective);
-        }
-        _ => panic!("Unknown objective: {}", objective_name),
-    }
-    //println!("{:#?}", ecosystem);
+    //Run Simulations...
+
+    let master_genepool = Genepool::from_individual_maxima(&asset_maxima);
+
+    let charts = AlignedChartDataSet::load(&asset_ids, from_time, to_times);
+    let result = run_simulation(
+        &objective_name,
+        &master_genepool,
+        charts,
+        num_species,
+        individuals_per_gene,
+    );
 
     //Print results...
-
-    let result = ecosystem.average_fittest_individuals(num_results_averaged);
-    //println!("{:#?}", result);
 
     let mut result_text = String::new();
     result_text += &format!(
@@ -276,6 +189,109 @@ fn main() {
     portfolio.save();
     result_text.push_str("\n\n");
     portfolio.save_text_log(&result_text);
+}
+
+fn run_simulation(
+    objective_name: &str,
+    master_genepool: &Genepool,
+    charts: AlignedChartDataSet,
+    num_species: usize,
+    individuals_per_gene: usize,
+) -> Individual {
+    println!(
+        "\nLoaded {} data sets with {} data points each, spaning from {} to {}.",
+        charts.len(),
+        charts.chart_len(),
+        NaiveDateTime::from_timestamp(charts.get_start_timestamp() / 1000, 0).date(),
+        NaiveDateTime::from_timestamp(charts.get_end_timestamp() / 1000, 0).date(),
+    );
+
+    let num_genes = charts.len();
+    let num_individuals = individuals_per_gene * num_genes;
+    let num_generations = num_individuals * 2;
+    let num_results_averaged = (num_species / 2).max(1);
+
+    println!(
+        "Evolving {} species of {} individuals with {} genes for {} generations, selecting for '{}'...",
+        num_species,
+        num_individuals,
+        num_genes,
+        num_generations,
+        objective_name
+    );
+
+    let mut ecosystem = Ecosystem::new(&master_genepool, num_species, num_individuals);
+    match objective_name {
+        OBJECTIVE_NAME_MAX_PERF => {
+            let objective = MaxPerformanceObjective { charts };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MIN_DAY_LOSS => {
+            let objective = MinDayLossObjective { charts };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MIN_LOSS => {
+            let objective = MinLossObjective { charts };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MIN_LOSS_SUM => {
+            let objective = MinLossSumObjective {
+                charts,
+                threshold: 0.01,
+                exp: 1.2,
+            };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MIN_LOSS_LENGTH => {
+            let objective = MinLossLengthObjective {
+                charts,
+                threshold: 0.01,
+                exp: 1.2,
+            };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MIN_LOSS_AREA => {
+            let objective = MinLossAreaObjective {
+                charts,
+                threshold: 0.01,
+                exp: 1.2,
+            };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MAX_GAIN_SUM => {
+            let objective = MaxGainSumObjective { charts, exp: 0.8 };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MAX_GAIN_LENGTH => {
+            let objective = MaxGainLengthObjective {
+                charts,
+                loss_tolerance: 0.025,
+                exp: 1.0,
+            };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MAX_UNI => {
+            let objective = MaxUniformityObjective {
+                charts,
+                uni_exp: 1.0,
+                perf_exp: 0.0,
+            };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        OBJECTIVE_NAME_MAX_UNI_PERF => {
+            let objective = MaxUniformityObjective {
+                charts,
+                uni_exp: 0.25,
+                perf_exp: 4.0,
+            };
+            ecosystem.evolve(&objective, num_generations);
+        }
+        _ => panic!("Unknown objective: {}", objective_name),
+    }
+    //println!("{:#?}", ecosystem);
+
+    let results = ecosystem.create_species_of_fittest_individuals(num_results_averaged);
+    return results.create_average_individual();
 }
 
 struct MaxPerformanceObjective {
