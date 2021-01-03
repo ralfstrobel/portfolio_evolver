@@ -114,32 +114,38 @@ impl Genepool {
             gene_minima.push(gene_min);
             gene_maxima.push(gene_max);
         }
-        return Genepool {
+        let genepool = Genepool {
             gene_minima,
             gene_maxima,
         };
+        genepool.validate();
+        return genepool;
     }
 
     ///
     /// Creates a genepool for individual gene maxima, but with no minima (all 0.0).
     ///
-    pub fn from_individual_maxima(gene_maxima: &Vec<f32>) -> Self {
+    pub fn from_individual_maxima(gene_maxima: &[f32]) -> Self {
         let gene_minima = vec![0.0; gene_maxima.len()];
-        return Genepool {
+        let genepool = Genepool {
             gene_minima,
-            gene_maxima: gene_maxima.clone(),
+            gene_maxima: gene_maxima.to_vec(),
         };
+        genepool.validate();
+        return genepool;
     }
 
     ///
     /// Creates a genepool from individual gene maxima and minima.
     ///
-    pub fn from_individual_constraints(gene_minima: &Vec<f32>, gene_maxima: &Vec<f32>) -> Self {
+    pub fn from_individual_constraints(gene_minima: &[f32], gene_maxima: &[f32]) -> Self {
         assert_eq!(gene_minima.len(), gene_maxima.len());
-        return Genepool {
-            gene_minima: gene_minima.clone(),
-            gene_maxima: gene_maxima.clone(),
+        let genepool = Genepool {
+            gene_minima: gene_minima.to_vec(),
+            gene_maxima: gene_maxima.to_vec(),
         };
+        genepool.validate();
+        return genepool;
     }
 
     ///
@@ -148,6 +154,17 @@ impl Genepool {
     #[inline]
     pub fn len(&self) -> usize {
         return self.gene_maxima.len();
+    }
+
+    ///
+    /// Reduces the currently defined maxima if they exceed the values of the given mask vector
+    ///
+    pub fn constrain_maxima(&mut self, maxima_mask: &[f32]) {
+        assert_eq!(self.gene_maxima.len(), maxima_mask.len());
+        for (i, value) in self.gene_maxima.iter_mut().enumerate() {
+            *value = value.min(maxima_mask[i]);
+        }
+        self.validate();
     }
 
     ///
@@ -162,6 +179,28 @@ impl Genepool {
         for (i, value) in self.gene_minima.iter_mut().enumerate() {
             *value = value.min(other.gene_minima[i]);
         }
+
+        self.validate();
+    }
+
+    ///
+    /// Validate that the given maxima and minima will work with the algorithm.
+    ///
+    fn validate(&self) {
+        self.gene_minima
+            .iter()
+            .for_each(|v| assert!(*v >= 0.0 && *v <= 1.0));
+        self.gene_maxima
+            .iter()
+            .for_each(|v| assert!(*v >= 0.0 && *v <= 1.0));
+        assert!(
+            self.gene_minima.iter().sum::<f32>() < 1.0,
+            "Gene minima must not add up to 1.0"
+        );
+        assert!(
+            self.gene_maxima.iter().sum::<f32>() >= 1.0,
+            "Gene maxima must add up to at least 1.0"
+        );
     }
 }
 
@@ -250,6 +289,7 @@ impl Individual {
 
             if sum == 0.0 {
                 //all non-saturated values are zero -> just fill them with equal distribution
+                assert_ne!(count, 0); //this can only happen if gene_maxima do not add up to 1.0
                 let share = norm / count as f32;
                 for (i, value) in self.genome.iter_mut().enumerate() {
                     if *value == 0.0 {
@@ -283,6 +323,7 @@ impl Individual {
     fn breed(&self, a: &Self, b: &Self, c: &Self, cross_coeff: f64, rng: &mut impl Rng) -> Self {
         let mut genome = self.genome.clone();
 
+        //TODO: only do this as fallback, not preventatively
         let mut force_cross: usize;
         loop {
             //pick one non-zero gene that will be crossed definitely
@@ -311,7 +352,7 @@ impl Individual {
     }
 
     #[inline]
-    pub fn get_genome(&self) -> &Vec<f32> {
+    pub fn get_genome(&self) -> &[f32] {
         return &self.genome;
     }
 

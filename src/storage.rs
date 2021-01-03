@@ -217,8 +217,8 @@ impl Portfolio {
 ///
 #[derive(Debug, Clone)]
 pub struct ChartData {
-    pub name: String,
-    pub values: Vec<f32>,
+    name: String,
+    values: Vec<f32>,
     start_timestamp: i64,
     end_timestamp: i64,
     interval: i64,
@@ -388,20 +388,21 @@ impl ChartData {
 ///
 #[derive(Debug, Clone)]
 pub struct AlignedChartDataSet {
-    pub charts: Vec<ChartData>,
+    charts: Vec<ChartData>,
 }
 
 #[allow(dead_code)]
 impl AlignedChartDataSet {
     ///
     /// Loads multiple charts at once and ensures they are aligned.
+    /// If some charts do not span the entire time frame, all others are truncated accordingly.
     ///
-    pub fn load(names: &[String], from_time: i64, to_time: i64) -> AlignedChartDataSet {
+    pub fn load(names: &[String], start_time: i64, end_time: i64) -> AlignedChartDataSet {
         let mut charts = Vec::new();
         let mut max_start_time = i64::min_value();
         let mut min_end_time = i64::max_value();
         for name in names.iter() {
-            let chart = ChartData::load(name, from_time, to_time);
+            let chart = ChartData::load(name, start_time, end_time);
             max_start_time = max_start_time.max(chart.start_timestamp);
             min_end_time = min_end_time.min(chart.end_timestamp);
             charts.push(chart);
@@ -416,6 +417,66 @@ impl AlignedChartDataSet {
         }
 
         return AlignedChartDataSet { charts };
+    }
+
+    ///
+    /// Loads multiple charts at once and forms gradually expanding aligned epochs.
+    /// This is intended for running multiple simulations that reach back varying time lengths,
+    /// each time only including those charts which contain data for the entire epoch.
+    /// The goal is to include both older and newer assets in a mathematically comparable fashion.
+    ///
+    /// The first epoch will span the entire given time frame, the next will advance the start date
+    /// by epoch_duration and so on, while the end date is always fixed.
+    ///
+    /// Each epoch will contain ChartData entries for each name, however, if there is
+    /// insufficient chart data to span the entire epoch, the ChartData values will be empty.
+    /// To prevent the simulation from crashing, this must be compensated by ensuring that
+    /// the coefficient passed to the combine() method is always capped at zero.
+    ///
+    pub fn load_epochs(
+        names: &[String],
+        epoch_start_times: &[i64],
+        mut end_time: i64,
+    ) -> Vec<AlignedChartDataSet> {
+        let mut charts = Vec::new();
+        for name in names.iter() {
+            let chart = ChartData::load(name, 0, i64::max_value());
+            end_time = end_time.min(chart.end_timestamp);
+            charts.push(chart);
+        }
+
+        let mut epoch_data_sets = Vec::new();
+        let mut epoch_charts_aligned_last: usize = 1;
+        for start_time in epoch_start_times.iter() {
+            let mut epoch_charts = Vec::new();
+            let mut epoch_charts_aligned: usize = 0;
+            for chart in charts.iter() {
+                if chart.start_timestamp <= *start_time {
+                    let mut chart = chart.clone();
+                    chart.truncate(*start_time, end_time);
+                    epoch_charts.push(chart);
+                    epoch_charts_aligned += 1;
+                } else {
+                    epoch_charts.push(ChartData {
+                        name: chart.name.clone(),
+                        values: Vec::new(),
+                        start_timestamp: *start_time,
+                        end_timestamp: end_time,
+                        interval: chart.interval,
+                    });
+                }
+            }
+            if epoch_charts_aligned <= epoch_charts_aligned_last {
+                //No (new) charts were aligned during this epoch, so it does not add knowledge.
+                continue;
+            }
+            epoch_data_sets.push(AlignedChartDataSet {
+                charts: epoch_charts,
+            });
+            epoch_charts_aligned_last = epoch_charts_aligned;
+        }
+
+        return epoch_data_sets;
     }
 
     ///
@@ -454,14 +515,65 @@ impl AlignedChartDataSet {
         return combined;
     }
 
+    ///
+    /// Returns the total number of charts in the set (whether they are empty or not).
+    ///
     #[inline]
     pub fn len(&self) -> usize {
         return self.charts.len();
     }
 
-    #[inline]
+    ///
+    /// Returns the total number of non-empty charts in the set.
+    /// Empty charts can occur when loading epoch data.
+    ///
+    pub fn len_non_empty(&self) -> usize {
+        let mut len: usize = 0;
+        for chart in self.charts.iter() {
+            if chart.values.len() != 0 {
+                len += 1;
+            }
+        }
+        return len;
+    }
+
+    ///
+    /// Returns the chart indices which contain non-empty charts.
+    ///
+    pub fn non_empty_indices(&self) -> Vec<usize> {
+        let mut indices = Vec::new();
+        for (i, chart) in self.charts.iter().enumerate() {
+            if chart.values.len() != 0 {
+                indices.push(i);
+            }
+        }
+        return indices;
+    }
+
+    ///
+    /// Returns the chart indices which contain empty charts.
+    ///
+    pub fn empty_indices(&self) -> Vec<usize> {
+        let mut indices = Vec::new();
+        for (i, chart) in self.charts.iter().enumerate() {
+            if chart.values.len() == 0 {
+                indices.push(i);
+            }
+        }
+        return indices;
+    }
+
+    ///
+    /// Returns the number of values in each of the non-empty charts.
+    ///
     pub fn chart_len(&self) -> usize {
-        return self.charts[0].values.len();
+        for chart in self.charts.iter() {
+            let len = chart.values.len();
+            if len != 0 {
+                return len;
+            }
+        }
+        return 0;
     }
 
     ///

@@ -52,7 +52,7 @@ const OBJECTIVE_SUFFIX_ENV: &str = "OPTIMIZATION_NAME_SUFFIX";
 const SAVE_RESULTS_ENV: &str = "SAVE_RESULTS";
 
 const NUM_SPECIES_ENV: &str = "NUM_SPECIES";
-const NUM_SPECIES_DEFAULT: &str = "35";
+const NUM_SPECIES_DEFAULT: &str = "7";
 const NUM_INDIVIDUALS_PER_GENE_ENV: &str = "NUM_INDIVIDUALS_PER_GENE";
 const NUM_INDIVIDUALS_PER_GENE_DEFAULT: &str = "16";
 const GENE_MAX_ENV: &str = "GENE_MAX";
@@ -84,26 +84,14 @@ fn main() {
 
     let portfolio_name = env::var(PORTFOLIO_ENV).unwrap();
 
-    let from_time: i64 = match env::var(DATE_FROM_ENV) {
-        Ok(date_from) => {
-            NaiveDate::parse_from_str(&date_from, DATE_FORMAT)
-                .unwrap()
-                .and_hms(0, 0, 0)
-                .timestamp()
-                * 1000
-        }
-        Err(_) => 0,
+    let start_date = match env::var(DATE_FROM_ENV) {
+        Ok(date_from) => NaiveDate::parse_from_str(&date_from, DATE_FORMAT).unwrap(),
+        Err(_) => NaiveDate::from_ymd(2010, 1, 1),
     };
 
-    let to_times: i64 = match env::var(DATE_TO_ENV) {
-        Ok(date_from) => {
-            NaiveDate::parse_from_str(&date_from, DATE_FORMAT)
-                .unwrap()
-                .and_hms(0, 0, 0)
-                .timestamp()
-                * 1000
-        }
-        Err(_) => i64::max_value(),
+    let end_date = match env::var(DATE_TO_ENV) {
+        Ok(date_from) => NaiveDate::parse_from_str(&date_from, DATE_FORMAT).unwrap(),
+        Err(_) => Utc::today().naive_local(),
     };
 
     let objective_name = env::var(OBJECTIVE_ENV).unwrap_or(String::from(OBJECTIVE_NAME_MAX_PERF));
@@ -135,7 +123,7 @@ fn main() {
     let asset_ids = portfolio.get_keys();
     let asset_titles = portfolio.get_titles();
 
-    let asset_maxima = portfolio
+    let asset_maxima: Vec<f32> = portfolio
         .get_mapped_property("max_percent", gene_maximum * 100.0)
         .iter()
         .map(|x| x * 0.01)
@@ -148,14 +136,33 @@ fn main() {
 
     let master_genepool = Genepool::from_individual_maxima(&asset_maxima);
 
-    let charts = AlignedChartDataSet::load(&asset_ids, from_time, to_times);
-    let result = run_simulation(
-        &objective_name,
-        &master_genepool,
-        charts,
-        num_species,
-        individuals_per_gene,
-    );
+    let end_time: i64 = end_date.and_hms(0, 0, 0).timestamp() * 1000;
+    let mut epoch_start_times: Vec<i64> = Vec::new();
+    loop {
+        let epoch_start_date = start_date
+            .with_year(start_date.year() + (epoch_start_times.len() as i32))
+            .unwrap();
+        if epoch_start_date >= end_date {
+            break;
+        }
+        epoch_start_times.push(epoch_start_date.and_hms(0, 0, 0).timestamp() * 1000);
+    }
+
+    let epoch_chart_sets =
+        AlignedChartDataSet::load_epochs(&asset_ids, &epoch_start_times, end_time);
+
+    let mut epoch_results = Species::new(master_genepool.clone());
+    for charts in epoch_chart_sets.into_iter() {
+        epoch_results.adopt_individual(run_simulation(
+            &objective_name,
+            &master_genepool,
+            charts,
+            num_species,
+            individuals_per_gene,
+        ));
+    }
+
+    let result = epoch_results.create_average_individual();
 
     //Print results...
 
@@ -198,19 +205,18 @@ fn run_simulation(
     num_species: usize,
     individuals_per_gene: usize,
 ) -> Individual {
-    println!(
-        "\nLoaded {} data sets with {} data points each, spaning from {} to {}.",
-        charts.len(),
-        charts.chart_len(),
-        NaiveDateTime::from_timestamp(charts.get_start_timestamp() / 1000, 0).date(),
-        NaiveDateTime::from_timestamp(charts.get_end_timestamp() / 1000, 0).date(),
-    );
-
-    let num_genes = charts.len();
+    let num_genes = charts.len_non_empty();
     let num_individuals = individuals_per_gene * num_genes;
     let num_generations = num_individuals * 2;
     let num_results_averaged = (num_species / 2).max(1);
 
+    println!(
+        "\nLoaded {} data sets with {} data points each, spanning from {} to {}.",
+        num_genes,
+        charts.chart_len(),
+        NaiveDateTime::from_timestamp(charts.get_start_timestamp() / 1000, 0).date(),
+        NaiveDateTime::from_timestamp(charts.get_end_timestamp() / 1000, 0).date(),
+    );
     println!(
         "Evolving {} species of {} individuals with {} genes for {} generations, selecting for '{}'...",
         num_species,
@@ -220,7 +226,17 @@ fn run_simulation(
         objective_name
     );
 
-    let mut ecosystem = Ecosystem::new(&master_genepool, num_species, num_individuals);
+    let mut genepool_mask = vec![1.0 as f32; master_genepool.len()];
+    for i in charts.empty_indices().iter() {
+        //mask out the charts which contain no data, so they will never be used
+        genepool_mask[*i] = 0.0;
+    }
+    let mut genepool = master_genepool.clone();
+    genepool.constrain_maxima(&genepool_mask);
+
+    //println!("{:#.10?}", genepool);
+
+    let mut ecosystem = Ecosystem::new(&genepool, num_species, num_individuals);
     match objective_name {
         OBJECTIVE_NAME_MAX_PERF => {
             let objective = MaxPerformanceObjective { charts };
