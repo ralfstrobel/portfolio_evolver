@@ -1,0 +1,16 @@
+services:
+  portfolio_evolver:
+    image: rust:slim
+    volumes:
+      - ./:/mnt/evolver
+      - ../run:/mnt/evolver/run
+      - ../portfolios:/mnt/portfolios
+      - ../data:/mnt/data
+      - build_target:/mnt/evolver/target
+      - cargo_registry:/usr/local/cargo/registry
+    working_dir: /mnt/evolver
+    command: cargo build --release
+
+volumes:
+  cargo_registry:
+  build_target:

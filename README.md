@@ -13,19 +13,19 @@ but can potentially be applied to any chart data.
 
 ## Setup
 
-To build the application, an [installed Rust compiler](https://www.rust-lang.org/tools/install) is required.
+To build the application, either use the provided docker-compose environment, or manually [install the Rust compiler](https://www.rust-lang.org/tools/install).
 
 The relative directory structure is currently hardcoded and should look like this...
 * [repository] (git checkout location, e.g. "evolver")
-  * src (rust source code)
-  * target (compiled executables)
+  * "src" (rust source code)
+  * "target" (compiled executables)
 * "data"
   * Individual JSON chart data files, named like the asset id (e.g. "myISIN.json")
 * "portfolios"
   * Individual JSON portfolio files that serve as both input and output
   * [current year] (e.g. "2021")
     * Copies of portfolio files, suffixed by date (output only, written after each run for archival purpose)
-* "run" (recommended)
+* "run"
   * run scripts for specific portfolios
 
 ##### Chart Data Files
@@ -108,3 +108,14 @@ In addition to these standard parameters, additional variables exist to tweak th
     cd "$(dirname "$0")/.."
     OPTIMIZATION_TARGET=min_loss_area cargo run --release
     OPTIMIZATION_TARGET=max_uni_perf cargo run --release
+
+##### Command Line Examples (docker-compose)
+
+Start a container with a shell interface and run scripts interactively:
+
+    docker-compose run --rm portfolio_evolver bash
+    run/my_script.sh
+
+Start a container to run a single script and then terminate:
+
+    docker-compose run --rm portfolio_evolver run/my_script.sh
